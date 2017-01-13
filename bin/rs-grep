@@ -1,0 +1,48 @@
+#!/usr/bin/env ruby
+require 'rubyscan'
+
+include Scan::Compile
+include Scan::Runtime
+
+compiler = Compiler.new
+
+flags = [:dotall,:allowempty]
+
+until ARGV.empty? or ARGV.first[0] != '-'
+  case opt = ARGV.shift
+    when '-i'
+      flags << :caseless
+    else
+      puts "unrecognized option: #{opt}"
+  end
+end
+
+expr = Expression.new(ARGV.shift)
+
+expr.set_flags(*flags)
+
+db = compiler.compile(expr)
+
+if ARGV.length > 0
+  source = File.open(ARGV.shift, 'rb')
+else
+  source = STDIN;
+end
+
+scanner = Scanner.new
+
+phase = Scanner::Unit.new db do |event, source|
+  puts "#{source}: #{event}"
+end
+
+scanner.phases << phase
+scanner.running = true
+
+until source.eof?
+  block = source.readline
+  scanner.scan block
+end
+
+sleep 1
+
+scanner.running = false
