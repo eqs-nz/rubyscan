@@ -11,15 +11,15 @@ static VALUE rscan_scratch_alloc(VALUE self);
 static VALUE rscan_scratch_m_initialize(VALUE self);
 
 extern VALUE rscan_scratch_define(VALUE root) {
-    VALUE vClass = rb_define_class_under(root, "ScratchArea", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_scratch_alloc);
-    rb_define_method(vClass, "initialize", rscan_scratch_m_initialize, 0);
-    return class_scratch = vClass;
+    VALUE klass = rb_define_class_under(root, "ScratchArea", rb_cObject);
+    rb_define_alloc_func(klass, rscan_scratch_alloc);
+    rb_define_method(klass, "initialize", rscan_scratch_m_initialize, 0);
+    return class_scratch = klass;
 }
 
 /* rubyscan::Native::ScratchArea class functions */
 static void rscan_scratch_free(rscan_scratch_t *pointer) {
-    free(pointer);
+    xfree(pointer);
 }
 
 static VALUE rscan_scratch_alloc(VALUE klass) {

@@ -18,12 +18,12 @@ extern void rscan_thread_error_set(VALUE self, int val) {
 
 extern VALUE rscan_thread_error_define(VALUE root) {
     /* init rubyscan error class */
-    VALUE vClass;
-    vClass = rb_define_class_under(root, "ThreadError", rb_eRuntimeError);
-    rb_define_alloc_func(vClass, rscan_thread_error_alloc);
-    rb_define_method(vClass, "value", rscan_thread_error_m_value, 0);
+    VALUE klass;
+    klass = rb_define_class_under(root, "ThreadError", rb_eRuntimeError);
+    rb_define_alloc_func(klass, rscan_thread_error_alloc);
+    rb_define_method(klass, "value", rscan_thread_error_m_value, 0);
 
-    return class_thread_error = vClass;
+    return class_thread_error = klass;
 }
 
 /* rubyscan::Native::ThreadError class functions */

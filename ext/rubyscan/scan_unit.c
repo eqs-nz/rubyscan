@@ -1,5 +1,5 @@
-/* scanner.c
- * pattern scanner object class
+/* scan_unit.h
+ * pattern scanner sub-unit class
  * written by Alex Fulton
  * Sept 2016
  */
@@ -22,33 +22,36 @@ static VALUE rscan_scan_unit_m_running_set(VALUE self, VALUE running);
 
 static int rscan_scan_unit_event_handler(unsigned int id, unsigned long long from,
         unsigned long long to, unsigned int flags, void *ctx);
-static VALUE rscan_scan_unit_event_receiver_thread(void* arg);
+static VALUE rscan_scan_unit_manager_thread(void* arg);
+static VALUE rscan_scan_unit_operator_thread(void* arg);
 static void* scan_gvl_wrapper(void* arg);
 
 extern VALUE rscan_scan_unit_define(VALUE root) {
-    VALUE vClass;
+    VALUE klass;
     id_new = rb_intern("new");
     id_abort_exc_set = rb_intern("abort_on_exception=");
 
-    vClass = rb_define_class_under(root, "Unit", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_scan_unit_alloc);
-    rb_define_method(vClass, "initialize", rscan_scan_unit_m_init, 1);
-    rb_define_method(vClass, "running=", rscan_scan_unit_m_running_set, 1);
+    klass = rb_define_class_under(root, "Unit", rb_cObject);
+    rb_define_alloc_func(klass, rscan_scan_unit_alloc);
+    rb_define_method(klass, "initialize", rscan_scan_unit_m_init, 1);
+    rb_define_method(klass, "running=", rscan_scan_unit_m_running_set, 1);
 
-    return class_unit = vClass;
+    return class_unit = klass;
 }
 
 void rscan_scan_unit_running_set(rscan_scan_unit_t *unit, int running) {
     VALUE handler_th, old_state, new_state;
-    rscan_event_queue_t *queue;
-    Get_Queue(unit->queue, queue);
+    rscan_event_queue_t *match_queue;
+    Get_Queue(unit->queue, match_queue);
+    
+    pthread_mutex_lock(&unit->lock);
     old_state = unit->running;
     unit->running = new_state = running ? Qtrue : Qfalse;
 
     // switching on
     if (!old_state && new_state) {
-        handler_th = rb_thread_create(&rscan_scan_unit_event_receiver_thread, (void *) unit);
-        rscan_queue_open(queue);
+        handler_th = rb_thread_create(&rscan_scan_unit_operator_thread, (void *) unit);
+        rscan_queue_open(match_queue);
         rb_thread_run(handler_th);
     }
 
@@ -56,6 +59,7 @@ void rscan_scan_unit_running_set(rscan_scan_unit_t *unit, int running) {
     if (old_state && !new_state) {
         rscan_queue_close(queue);
     }
+    pthread_mutex_unlock(&unit->lock);
 }
 
 int rscan_scan_unit_running_get(rscan_scan_unit_t *unit) {
@@ -70,8 +74,12 @@ static void rscan_scan_unit_free(rscan_scan_unit_t *pointer) {
 static void rscan_scan_unit_mark(rscan_scan_unit_t *pointer) {
     rb_gc_mark(pointer->db);
     rb_gc_mark(pointer->scratch);
-    rb_gc_mark(pointer->queue);
-    rb_gc_mark(pointer->handler);
+    rb_gc_mark(pointer->op_buffer);
+    rb_gc_mark(pointer->op_cache);
+    rb_gc_mark(pointer->handler_queue);
+    rb_gc_mark(pointer->op_th);
+    rb_gc_mark(pointer->handler_th);
+    rb_gc_mark(pointer->handler_proc);
 }
 
 static VALUE rscan_scan_unit_alloc(VALUE klass) {
@@ -94,11 +102,13 @@ static VALUE rscan_scan_unit_m_init(VALUE self, VALUE oDb) {
     rb_need_block();
     Get_Scan_Unit(self, unit);
     unit->running = Qfalse;
-    unit->handler = rb_block_proc();
+    unit->handler_proc = rb_block_proc();
     unit->db = oDb;
     unit->scratch = rb_funcall(rscan_class_scratch(), rb_intern("new"), 0);
-    unit->queue = rb_funcall(rscan_class_queue(), rb_intern("new"), 0);
-    unit->match = &rscan_scan_unit_event_handler;
+    unit->op_buffer = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    unit->op_cache = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    unit->handler_queue = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    unit->match_func = &rscan_scan_unit_event_handler;
     pthread_mutexattr_init(&attr_lock);
     pthread_mutexattr_settype(&attr_lock, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutexattr_setprotocol(&attr_lock, PTHREAD_PRIO_INHERIT);
@@ -179,7 +189,6 @@ static VALUE rscan_scan_unit_m_running_set(VALUE self, VALUE running) {
 }
 
 extern hs_error_t rscan_scan_unit_invoke(rscan_scan_unit_t *unit, char *data, int len) {
-    VALUE handler;
     scan_gvl_arg_t arg;
     hs_error_t status;
 
@@ -202,11 +211,13 @@ extern hs_error_t rscan_scan_unit_invoke(rscan_scan_unit_t *unit, char *data, in
 
 static int rscan_scan_unit_event_handler(unsigned int id, unsigned long long from,
         unsigned long long to, unsigned int flags, void *ctx) {
+    rscan_scan_event_t *scan;
     rscan_scan_unit_t *unit;
     rscan_event_queue_t *queue;
     rscan_match_event_t *event;
 
-    unit = (rscan_scan_unit_t*) ctx;
+    scan = (rscan_scan_event_t*) ctx;
+    unit = scan
     Get_Queue(unit->queue, queue);
 
     event = ALLOC(rscan_match_event_t);
@@ -222,11 +233,10 @@ static int rscan_scan_unit_event_handler(unsigned int id, unsigned long long fro
     return HS_SUCCESS;
 }
 
-static VALUE rscan_scan_unit_event_receiver_thread(void* arg) {
+static VALUE rscan_scan_unit_manager_thread(void* arg) {
     rscan_scan_unit_t* unit;
     rscan_event_queue_t* queue;
-    rscan_match_event_t* event;
-    rscan_match_event_t** eventPtr;
+    rscan_scan_event_t* event;
     VALUE args, eventObject;
     int status;
     unit = (rscan_scan_unit_t*) arg;
@@ -237,7 +247,37 @@ static VALUE rscan_scan_unit_event_receiver_thread(void* arg) {
 
     while (queue->open) {
         // consume event
-        if (status = rscan_queue_shift_nogvlwait(queue, &event)) {
+        if (status = rscan_event_queue_peek_nogvlwait(queue, (rscan_event_t **)&event)) {
+            if (status == RSCAN_QUEUE_FAIL_CLOSED) {
+                continue;
+            } else {
+                // TODO: handle other failure conditions
+            }
+        }
+
+        rscan_event_queue_
+    }
+
+
+    return Qtrue;
+}
+
+static VALUE rscan_scan_unit_operator_thread(void* arg) {
+    rscan_scan_unit_t* unit;
+    rscan_event_queue_t* buffer, cache;
+    rscan_scan_t* event;
+    VALUE args, eventObject;
+    int status;
+    unit = (rscan_scan_unit_t*) arg;
+    Get_Queue(unit->op_buffer, buffer);
+    Get_Queue(unit->op_cache, cache);
+
+    // set local thread abort-on-exception status
+    rb_funcall(rb_thread_current(), id_abort_exc_set, 1, Qtrue);
+
+    while (queue->open) {
+        // consume event
+        if (status = rscan_event_queue_shift_nogvlwait(queue, (rscan_event_t **)&event)) {
             if (status == RSCAN_QUEUE_FAIL_CLOSED) {
                 continue;
             } else {
@@ -253,7 +293,6 @@ static VALUE rscan_scan_unit_event_receiver_thread(void* arg) {
         // call handler
         rb_proc_call(unit->handler, args);
     }
-
 
     return Qtrue;
 }

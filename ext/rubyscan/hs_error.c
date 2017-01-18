@@ -14,14 +14,14 @@ static VALUE rscan_hs_error_m_message(VALUE self);
 
 extern void rscan_hs_error_define(VALUE root) {
     /* init hyperscan error class */
-    VALUE vClass;
-    vClass = rb_define_class_under(root, "HyperscanError", rb_eRuntimeError);
-    rb_define_alloc_func(vClass, rscan_hs_error_alloc);
-    rb_define_method(vClass, "initialize", rscan_hs_error_m_initialize, 1);
-    rb_define_method(vClass, "value", rscan_hs_error_m_value, 0);
-    rb_define_method(vClass, "message", rscan_hs_error_m_message, 0);
+    VALUE klass;
+    klass = rb_define_class_under(root, "HyperscanError", rb_eRuntimeError);
+    rb_define_alloc_func(klass, rscan_hs_error_alloc);
+    rb_define_method(klass, "initialize", rscan_hs_error_m_initialize, 1);
+    rb_define_method(klass, "value", rscan_hs_error_m_value, 0);
+    rb_define_method(klass, "message", rscan_hs_error_m_message, 0);
 
-    class_hs_error = vClass;
+    class_hs_error = klass;
 }
 
 void rscan_hs_error_set(VALUE self, hs_error_t val) {
@@ -32,7 +32,7 @@ void rscan_hs_error_set(VALUE self, hs_error_t val) {
 
 /* Hyperscan::Native::HyperscanError class functions */
 static void rscan_hs_error_free(hs_error_t *pointer) {
-    free(pointer);
+    xfree(pointer);
 }
 
 static VALUE rscan_hs_error_alloc(VALUE klass) {

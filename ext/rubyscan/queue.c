@@ -21,10 +21,10 @@ static rscan_queue_err_t rscan_queue_shift_inner(rscan_event_queue_t *queue, rsc
 
 /* public interface */
 VALUE rscan_queue_define(VALUE root) {
-    VALUE vClass = rb_define_class_under(root, "EventQueue", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_queue_alloc);
-    rb_define_method(vClass, "initialize", rscan_queue_m_initialize, 0);
-    return class_queue = vClass;
+    VALUE klass = rb_define_class_under(root, "EventQueue", rb_cObject);
+    rb_define_alloc_func(klass, rscan_queue_alloc);
+    rb_define_method(klass, "initialize", rscan_queue_m_initialize, 0);
+    return class_queue = klass;
 }
 
 void rscan_queue_close(rscan_event_queue_t *queue) {
@@ -191,6 +191,164 @@ rscan_queue_err_t rscan_queue_shift_nonblock_opt(rscan_event_queue_t *queue,
     return rscan_queue_shift_inner(queue, out);
 }
 
+void rscan_queue_close(rscan_event_queue_t *queue) {
+    pthread_mutex_lock(&queue->lock);
+    if (queue->open) {
+        queue->open = QUEUE_CLOSED;
+        rscan_queue_drop_all(queue);
+    }
+    // subsequent calls to close() on a closed queue re-signal the conditions
+    pthread_cond_broadcast(&queue->ready);
+    pthread_cond_broadcast(&queue->empty);
+    pthread_mutex_unlock(&queue->lock);
+}
+
+rscan_queue_err_t rscan_queue_closed_p(rscan_event_queue_t *queue) {
+    return (queue->open == QUEUE_CLOSED);
+}
+
+void rscan_queue_open(rscan_event_queue_t *queue) {
+    pthread_mutex_lock(&queue->lock);
+    if (!queue->open) {
+        queue->open = QUEUE_OPEN;
+    }
+    pthread_mutex_unlock(&queue->lock);
+}
+
+rscan_queue_err_t rscan_queue_open_p(rscan_event_queue_t *queue) {
+    return (queue->open == QUEUE_OPEN);
+}
+
+void rscan_queue_put(rscan_event_queue_t *queue, rscan_match_event_t *event) {
+    struct queue_member *unit;
+    int queue_was_empty;
+    pthread_mutex_lock(&queue->lock);
+    if (!queue->open) {
+        // events sent to a closed queue are dropped
+        xfree(event);
+        pthread_mutex_unlock(&queue->lock);
+        return;
+    }
+    queue_was_empty = Queue_Empty(queue);
+    unit = ALLOC(struct queue_member);
+    unit->event = event;
+    unit->next = NULL;
+    if (queue->head == NULL) {
+        queue->head = unit;
+    }
+    if (queue->tail != NULL) {
+        queue->tail->next = unit;
+    }
+    queue->tail = unit;
+    if (queue_was_empty) {
+        pthread_cond_signal(&queue->ready);
+    }
+    pthread_mutex_unlock(&queue->lock);
+}
+
+void* rscan_queue_peek(rscan_queue_t *queue) {
+    void *val;
+    int status;
+    if (status = rscan_queue_peek_ptr(queue, &val)) {
+        errno = status;
+        val = NULL;
+    }
+    return val;
+}
+
+// GVL-safe function: rscan_queue_peek_ptr
+
+rscan_queue_err_t rscan_queue_peek_ptr(rscan_event_queue_t *queue, rscan_match_event_t **out) {
+    return rscan_queue_shift_ptr_gvl(queue, NULL, out);
+}
+
+static rscan_queue_err_t rscan_queue_peek_ptr_gvl(rscan_event_queue_t *queue,
+        queue_gvl_arg_t *args, rscan_match_event_t **out) {
+    rscan_queue_err_t status;
+    pthread_mutex_lock(&queue->lock);
+
+    while (Queue_Empty(queue)) {
+        if (args != NULL && args->interrupted) {
+            *out = NULL;
+            return RSCAN_QUEUE_FAIL_INTERRUPT;
+        }
+        if (!queue->open) {
+            *out = NULL;
+            pthread_mutex_unlock(&queue->lock);
+            return RSCAN_QUEUE_FAIL_CLOSED;
+        }
+        pthread_cond_wait(&queue->ready, &queue->lock);
+
+    }
+    if (args != NULL && args->interrupted) {
+        *out = NULL;
+        return RSCAN_QUEUE_FAIL_INTERRUPT;
+    }
+    status = rscan_queue_shift_inner(queue, out);
+    pthread_mutex_unlock(&queue->lock);
+    return status;
+}
+
+rscan_queue_err_t rscan_queue_peek_nogvlwait(rscan_event_queue_t *queue, void **out) {
+    rscan_queue_err_t status;
+    queue_gvl_arg_t args;
+
+    if (status = rscan_queue_peek_nonblock_opt(queue, 0, out)) {
+        if (status == RSCAN_QUEUE_FAIL_LOCKBUSY || status == RSCAN_QUEUE_FAIL_EMPTY) {
+
+            args.queue = queue;
+            args.out = out;
+            args.interrupted = 0;
+            if (status = (rscan_queue_err_t) rb_thread_call_without_gvl(queue_peek_gvl_wrapper, (void *) &args,
+                    queue_gvl_unblock, (void *) &args)) {
+                // TODO: handle/log failures
+            }
+        }
+    }
+    return status;
+}
+
+static void *queue_peek_gvl_wrapper(void *arg) {
+    queue_gvl_arg_t *args;
+    args = (queue_gvl_arg_t *) arg;
+    return (void *) rscan_queue_peek_ptr_gvl(args->queue, args, args->out);
+}
+
+// GVL-safe function: rscan_queue_shift_nonblock_opt
+
+rscan_queue_err_t rscan_queue_peek_nonblock_opt(rscan_event_queue_t *queue,
+        int bWaitForLock, rscan_match_event_t **out) {
+    int status;
+    /* task: acquire lock */
+    if (!bWaitForLock) {
+        if (status = pthread_mutex_trylock(&queue->lock)) {
+            /* condition: exception */
+            switch (status) {
+                case EBUSY:
+                    /* fail */
+                    return RSCAN_QUEUE_FAIL_LOCKBUSY;
+                default:
+                    /* error */
+                    return RSCAN_QUEUE_FAIL_UNDEF;
+            }
+        }
+        /* condition: lock is held */
+    } else {
+        if (status = pthread_mutex_lock(&queue->lock)) {
+            /* condition: error */
+            return RSCAN_QUEUE_FAIL_UNDEF;
+        }
+    }
+    /* condition: lock is held */
+    if (Queue_Empty(queue)) {
+        /* condition: fail */
+        pthread_mutex_unlock(&queue->lock);
+        return RSCAN_QUEUE_FAIL_EMPTY;
+    }
+    /* condition: lock is held, queue is not empty */
+    return rscan_queue_peek_inner(queue, out);
+}
+
 void rscan_queue_destroy(rscan_event_queue_t *queue) {
     rscan_queue_drop_all(queue);
     pthread_cond_destroy(&(queue->ready));
@@ -305,8 +463,8 @@ static VALUE rscan_queue_m_initialize(VALUE self) {
 }
 
 /* ***UNSAFE FUNCTION*** only call when write-lock on queue is held */
-static rscan_queue_err_t rscan_queue_shift_inner(rscan_event_queue_t *queue, rscan_match_event_t **val) {
-    rscan_event_queue_member_t *head = queue->head;
+static rscan_queue_err_t rscan_queue_shift_inner(rscan_queue_t *queue, void **val) {
+    struct queue_member *head = queue->head;
     *val = head->event;
     queue->head = head->next;
     if (queue->head != NULL && queue->head == queue->tail) {
@@ -316,6 +474,13 @@ static rscan_queue_err_t rscan_queue_shift_inner(rscan_event_queue_t *queue, rsc
     if (Queue_Empty(queue)) {
         pthread_cond_signal(&queue->empty);
     }
+    return RSCAN_QUEUE_SUCCESS;
+}
+
+/* ***UNSAFE FUNCTION*** only call when read-lock on queue is held */
+static rscan_queue_err_t rscan_queue_shift_inner(rscan_queue_t *queue, void **val) {
+    rscan_event_queue_member_t *head = queue->head;
+    *val = head->event;
     return RSCAN_QUEUE_SUCCESS;
 }
 

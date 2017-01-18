@@ -13,16 +13,16 @@ static VALUE rscan_platform_m_populate(VALUE self);
 static void rscan_platform_populate(hs_platform_info_t *pPlatform);
 
 extern VALUE rscan_platform_define(VALUE root) {
-    VALUE vClass = rb_define_class_under(root, "PlatformInfo", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_platform_alloc);
-    rb_define_method(vClass, "initialize", rscan_platform_m_initialize, 0);
-    rb_define_method(vClass, "populate", rscan_platform_m_populate, 0);
-    return class_platform = vClass;
+    VALUE klass = rb_define_class_under(root, "PlatformInfo", rb_cObject);
+    rb_define_alloc_func(klass, rscan_platform_alloc);
+    rb_define_method(klass, "initialize", rscan_platform_m_initialize, 0);
+    rb_define_method(klass, "populate", rscan_platform_m_populate, 0);
+    return class_platform = klass;
 }
 
 /* rubyscan::Native::PlatformInfo class functions */
 static void rscan_platform_free(hs_platform_info_t *pointer) {
-    free(pointer);
+    xfree(pointer);
 }
 
 static VALUE rscan_platform_alloc(VALUE klass) {

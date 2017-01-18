@@ -12,10 +12,10 @@ static VALUE rscan_compile_error_m_message(VALUE self);
 
 extern VALUE rscan_compile_error_define(VALUE root) {
     /* init compile error class */
-    VALUE vClass = rb_define_class_under(root, "CompileError", rb_eRuntimeError);
-    rb_define_alloc_func(vClass, rscan_compile_error_alloc);
-    rb_define_method(vClass, "message", rscan_compile_error_m_message, 0);
-    return class_compile_error = vClass;
+    VALUE klass = rb_define_class_under(root, "CompileError", rb_eRuntimeError);
+    rb_define_alloc_func(klass, rscan_compile_error_alloc);
+    rb_define_method(klass, "message", rscan_compile_error_m_message, 0);
+    return class_compile_error = klass;
 }
 
 extern void rscan_compile_error_set(VALUE self, hs_compile_error_t* val) {

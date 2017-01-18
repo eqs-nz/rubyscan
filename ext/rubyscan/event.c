@@ -11,12 +11,12 @@ static void rscan_event_free(rscan_match_event_t **pointer);
 static VALUE rscan_event_alloc(VALUE klass);
 
 extern VALUE rscan_event_define(VALUE root) {
-    VALUE vClass = rb_define_class_under(root, "MatchEvent", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_event_alloc);
-    return class_event = vClass;
+    VALUE klass = rb_define_class_under(root, "Event", rb_cObject);
+    rb_define_alloc_func(klass, rscan_event_alloc);
+    return class_event = klass;
 }
 
-/* rubyscan::Native::MatchEvent class functions */
+/* Scan::Runtime::Event class functions */
 static void rscan_event_free(rscan_match_event_t **pointer) {
     xfree(*pointer);
     xfree(pointer);

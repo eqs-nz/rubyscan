@@ -1,5 +1,5 @@
-/* scanner.h
- * pattern scanner object class
+/* scan_unit.h
+ * pattern scanner sub-unit class
  * written by Alex Fulton
  * Sept 2016
  */
@@ -12,9 +12,13 @@ typedef struct scan_unit {
     VALUE running;
     VALUE db;
     VALUE scratch;
-    VALUE queue;
-    match_event_handler match;
-    VALUE handler;
+    VALUE op_buffer;
+    VALUE op_cache;
+    VALUE handler_queue;
+    VALUE op_th;
+    VALUE handler_th;
+    match_event_handler match_func;
+    VALUE handler_proc;
 } rscan_scan_unit_t;
 
 VALUE rscan_scan_unit_define(VALUE root);

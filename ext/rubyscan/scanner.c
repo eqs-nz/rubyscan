@@ -47,20 +47,33 @@ static VALUE rscan_scanner_m_init(VALUE self) {
     rscan_scanner_t *scanner;
     Get_Scanner(self, scanner);
     scanner->running = Qfalse;
+    scanner->in_buffer = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
     scanner->phases = rb_ary_new();
+    scanner->next_id = 0;
     return self;
 }
 
 static VALUE rscan_scanner_m_scan(VALUE self, VALUE data) {
-    int i, cDataLen;
-    char* cData;
+    int i/*, cDataLen*/;
+    //char* cData;
     rscan_scanner_t* scanner;
     rscan_scan_unit_t* unit;
+    rscan_scan_event_t* event;
+    struct event_queue *buffer;
     hs_error_t status;
     Check_Type(data, T_STRING);
     Get_Scanner(self, scanner);
-    cData = StringValuePtr(data);
-    cDataLen = RSTRING_LEN(data);
+    Get_Event_Queue(scanner->in_buffer, buffer);
+    event = ALLOC(rscan_scan_event_t);
+    event.head.id = __atomic_fetch_add(&scanner->next_id, 1, __ATOMIC_ACQ_REL));
+    event.head.src = scanner;
+    //cData = StringValuePtr(data);
+    //cDataLen = RSTRING_LEN(data);
+    event.data = data;
+
+    rscan_queue_put(buffer, event);
+
+    /*
     for (i = 0; i < RARRAY_LEN(scanner->phases); i++) {
         Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
         if (status = rscan_scan_unit_invoke(unit, cData, cDataLen)) {
@@ -68,7 +81,7 @@ static VALUE rscan_scanner_m_scan(VALUE self, VALUE data) {
                 continue;
             }
         }
-    }
+    }*/
 
     return self;
 }
@@ -100,19 +113,61 @@ static VALUE rscan_scanner_m_running_get(VALUE self) {
 static VALUE rscan_scanner_m_running_set(VALUE self, VALUE running) {
     rscan_scanner_t *scanner;
     rscan_scan_unit_t *unit;
+    rscan_event_queue_t *buffer;
     VALUE old_state, new_state;
     Get_Scanner(self, scanner);
+    Get_Event_Queue(buffer, scanner->in_buffer);
     old_state = scanner->running;
-    scanner->running = new_state = RTEST(running)? Qtrue : Qfalse;
-    // switching on or off
-    if ((new_state && !old_state) || (old_state &&!new_state)) {
+    scanner->running = new_state = RTEST(running) ? Qtrue : Qfalse;
+    // switching on
+    if (new_state && !old_state) {
         int i;
+        // first fire up units, then start handling scans
+        for (i = 0; i < RARRAY_LEN(scanner->phases); i++) {
+            Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
+            rscan_scan_unit_running_set(unit, new_state);
+        }
+        scanner->manager = rb_thread_new(&scanner_management_thread, (void *)scanner);
+        rscan_queue_open(buffer);
+        rb_thread_run(manager);
+    }
+    // switching off
+    if (old_state &&!new_state) {
+        int i;
+        // turn off incoming scans, then shut down units
+        rscan_queue_close(buffer);
         for (i = 0; i < RARRAY_LEN(scanner->phases); i++) {
             Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
             rscan_scan_unit_running_set(unit, new_state);
         }
     }
     return new_state;
+}
+
+static VALUE scanner_management_thread(void *arg) {
+    rscan_scanner_t *scanner;
+    rscan_event_queue_t *queue;
+    rscan_scan_event_t *event;
+    VALUE first_unit;
+    scanner = (rscan_scanner_t *) arg;
+    Get_Event_Queue(scanner->in_buffer, queue);
+    Get_Scan_Unit(RARRAY_AREF(scanner->phases, 0), first_unit);
+    
+    while (queue->open) {
+        // consume event
+        if (status = rscan_queue_shift_nogvlwait(queue, (rscan_event_t **)&event)) {
+            if (status == RSCAN_QUEUE_FAIL_CLOSED) {
+                continue;
+            } else {
+                // TODO: handle other failure conditions
+            }
+        }
+        // condition: *event points to a new event
+        rscan_scan_unit_invoke(first_unit, )
+    }
+    
+    return Qtrue;
+
 }
 
 extern VALUE rscan_class_scanner() {

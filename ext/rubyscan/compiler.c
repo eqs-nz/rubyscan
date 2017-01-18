@@ -24,7 +24,7 @@ static unsigned int rscan_compiler_mode_value(ID modeId);
 static ID rscan_compiler_mode_id(unsigned int value);
 
 extern VALUE rscan_compiler_define(VALUE root) {
-    VALUE vClass;
+    VALUE klass;
     rscan_compiler_mode_undef = rb_intern("undef");
     rscan_compiler_mode_block = rb_intern("block");
     rscan_compiler_mode_nostream = rb_intern("nostream");
@@ -34,21 +34,21 @@ extern VALUE rscan_compiler_define(VALUE root) {
     rscan_compiler_mode_som_horizon_medium = rb_intern("som_horizon_medium");
     rscan_compiler_mode_som_horizon_small = rb_intern("som_horizon_small");
 
-    vClass = rb_define_class_under(root, "Compiler", rb_cObject);
-    rb_define_alloc_func(vClass, rscan_compiler_alloc);
-    rb_define_method(vClass, "initialize", rscan_compiler_m_initialize, 0);
-    rb_define_method(vClass, "compile", rscan_compiler_m_compile, 1);
-    rb_define_method(vClass, "mode", rscan_compiler_m_mode_get, 0);
-    rb_define_method(vClass, "mode=", rscan_compiler_m_mode_set, 1);
-    rb_define_method(vClass, "platform", rscan_compiler_m_platform_get, 0);
-    rb_define_method(vClass, "platform=", rscan_compiler_m_platform_set, 1);
+    klass = rb_define_class_under(root, "Compiler", rb_cObject);
+    rb_define_alloc_func(klass, rscan_compiler_alloc);
+    rb_define_method(klass, "initialize", rscan_compiler_m_initialize, 0);
+    rb_define_method(klass, "compile", rscan_compiler_m_compile, 1);
+    rb_define_method(klass, "mode", rscan_compiler_m_mode_get, 0);
+    rb_define_method(klass, "mode=", rscan_compiler_m_mode_set, 1);
+    rb_define_method(klass, "platform", rscan_compiler_m_platform_get, 0);
+    rb_define_method(klass, "platform=", rscan_compiler_m_platform_set, 1);
 
-    return class_compiler = vClass;
+    return class_compiler = klass;
 }
 
 /* HS::Compiler::Compiler class functions */
 static void rscan_compiler_free(rscan_compiler_t *pointer) {
-    free(pointer);
+    xfree(pointer);
 }
 
 static void rscan_compiler_mark(rscan_compiler_t *compiler) {
