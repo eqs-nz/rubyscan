@@ -37,7 +37,8 @@ traverse = y.(lambda { |recurse|
     lambda { |file|
       return if file =~ /^\.+/
       if Dir.exist? "#{path}/#{file}"
-        return Dir.new("#{path}/#{file}").entries.collect &recurse.("#{path}/#{file}")
+        # ruby extensions are flat in structure for now
+        # return Dir.new("#{path}/#{file}").entries.collect &recurse.("#{path}/#{file}")
       elsif File.exist? "#{path}/#{file}"
         puts "saw #{path}/#{file}"
         $srcs << "#{path}/#{file}" if file =~ /.*\.c$/
