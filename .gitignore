@@ -5,7 +5,7 @@
 *.bundle
 
 .idea/
-.netbeans/
+nbproject/private/
 pkg/
 Gemfile.lock
 
