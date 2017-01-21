@@ -5,7 +5,7 @@
 *.bundle
 
 .idea/
-nbproject/private/
+ext/*/nbproject/private/
 pkg/
 Gemfile.lock
 

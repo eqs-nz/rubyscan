@@ -20,8 +20,8 @@ struct event_queue {
     struct event_queue_member *tail;
 }
 
-VALUE rscan_queue_define(VALUE root);
-VALUE rscan_class_queue();
+VALUE rscan_event_queue_define(VALUE root);
+VALUE rscan_class_event_queue();
 
 #define rscan_event_queue_put(queue, event) \
             rscan_queue_put((rscan_queue_t *)(queue), (rscan_event_t *)event)
