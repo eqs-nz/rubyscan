@@ -7,15 +7,16 @@
 #define RSCAN_SCAN_EVENT_H
 
 struct scan_event {
-    rscan_event_t head;
+    unsigned long long id;
+    struct scanner *src;
     VALUE data;
     unsigned int matched;
     unsigned int handled;
-} rscan_scan_event_t;
+};
 
 extern VALUE rscan_scan_event_define(VALUE root);
 extern VALUE rscan_class_scan_event();
 
 #define Get_Scan_Event(value,pointer) \
-        Data_Get_Struct(value,rscan_scan_event_t,pointer)
+        Data_Get_Struct(value,struct scan_event,pointer)
 #endif

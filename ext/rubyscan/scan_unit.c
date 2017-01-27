@@ -11,6 +11,7 @@ typedef struct scan_gvl_arg {
     int len;
 } scan_gvl_arg_t;
 
+// TODO: move these symbols and their init code to mod_common
 static ID id_new;
 static ID id_abort_exc_set;
 
@@ -19,10 +20,11 @@ static VALUE class_unit;
 static VALUE rscan_scan_unit_alloc(VALUE self);
 static VALUE rscan_scan_unit_m_init(VALUE self, VALUE oDb);
 static VALUE rscan_scan_unit_m_running_set(VALUE self, VALUE running);
+static hs_error_t rscan_scan_unit_do_scan(rscan_scan_unit_t *unit, char *data, int len);
 
 static int rscan_scan_unit_event_handler(unsigned int id, unsigned long long from,
         unsigned long long to, unsigned int flags, void *ctx);
-static VALUE rscan_scan_unit_manager_thread(void* arg);
+static VALUE rscan_scan_unit_match_handler_thread(void* arg);
 static VALUE rscan_scan_unit_operator_thread(void* arg);
 static void* scan_gvl_wrapper(void* arg);
 
@@ -41,8 +43,10 @@ extern VALUE rscan_scan_unit_define(VALUE root) {
 
 void rscan_scan_unit_running_set(rscan_scan_unit_t *unit, int running) {
     VALUE handler_th, old_state, new_state;
-    rscan_event_queue_t *match_queue;
-    Get_Queue(unit->queue, match_queue);
+    struct event_queue *op_buffer, *op_cache, *handler_queue;
+    Get_Event_Queue(unit->op_buffer, op_buffer);
+    Get_Event_Queue(unit->op_cache, op_cache);
+    Get_Event_Queue(unit->match_buffer, handler_queue);
     
     pthread_mutex_lock(&unit->lock);
     old_state = unit->running;
@@ -50,14 +54,16 @@ void rscan_scan_unit_running_set(rscan_scan_unit_t *unit, int running) {
 
     // switching on
     if (!old_state && new_state) {
-        handler_th = rb_thread_create(&rscan_scan_unit_operator_thread, (void *) unit);
-        rscan_queue_open(match_queue);
-        rb_thread_run(handler_th);
+        rscan_event_queue_open(handler_queue);
+        rscan_event_queue_open(op_buffer);
+        rscan_event_queue_open(op_cache);
+        rb_thread_run(unit->op_th);
+        rb_thread_run(unit->match_th);
     }
 
     // switching off
     if (old_state && !new_state) {
-        rscan_queue_close(queue);
+        rscan_event_queue_close(handler_queue);
     }
     pthread_mutex_unlock(&unit->lock);
 }
@@ -66,7 +72,7 @@ int rscan_scan_unit_running_get(rscan_scan_unit_t *unit) {
     return (int) unit->running;
 }
 
-/* rubyscan::Native::Scanner::Unit class functions */
+/* Rubyscan::Runtime::Scanner::Unit class functions */
 static void rscan_scan_unit_free(rscan_scan_unit_t *pointer) {
     xfree(pointer);
 }
@@ -76,9 +82,9 @@ static void rscan_scan_unit_mark(rscan_scan_unit_t *pointer) {
     rb_gc_mark(pointer->scratch);
     rb_gc_mark(pointer->op_buffer);
     rb_gc_mark(pointer->op_cache);
-    rb_gc_mark(pointer->handler_queue);
+    rb_gc_mark(pointer->match_buffer);
     rb_gc_mark(pointer->op_th);
-    rb_gc_mark(pointer->handler_th);
+    rb_gc_mark(pointer->match_th);
     rb_gc_mark(pointer->handler_proc);
 }
 
@@ -101,13 +107,16 @@ static VALUE rscan_scan_unit_m_init(VALUE self, VALUE oDb) {
     VALUE error;
     rb_need_block();
     Get_Scan_Unit(self, unit);
+    unit->self = self;
     unit->running = Qfalse;
     unit->handler_proc = rb_block_proc();
     unit->db = oDb;
+    unit->op_th = rb_thread_create(&rscan_scan_unit_operator_thread, (void *) unit);
+    unit->match_th = rb_thread_create(&rscan_scan_unit_match_handler_thread, (void *) unit);
     unit->scratch = rb_funcall(rscan_class_scratch(), rb_intern("new"), 0);
     unit->op_buffer = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
     unit->op_cache = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
-    unit->handler_queue = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    unit->match_buffer = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
     unit->match_func = &rscan_scan_unit_event_handler;
     pthread_mutexattr_init(&attr_lock);
     pthread_mutexattr_settype(&attr_lock, PTHREAD_MUTEX_RECURSIVE);
@@ -188,7 +197,18 @@ static VALUE rscan_scan_unit_m_running_set(VALUE self, VALUE running) {
     return running;
 }
 
-extern hs_error_t rscan_scan_unit_invoke(rscan_scan_unit_t *unit, char *data, int len) {
+void rscan_scan_unit_push_event(rscan_scan_unit_t *unit, struct scan_event *event) {
+    VALUE op_v;
+    struct scan_op *op;
+    
+    op_v = rb_funcall(rscan_class_scan_op(), id_new, 0);
+    Get_Scan_Op(op_v, op);
+    op->target = unit;
+    op->src = event;
+    rscan_event_queue_put(unit->op_buffer, op);
+}
+
+static hs_error_t rscan_scan_unit_do_scan(rscan_scan_unit_t *unit, char *data, int len) {
     scan_gvl_arg_t arg;
     hs_error_t status;
 
@@ -200,8 +220,8 @@ extern hs_error_t rscan_scan_unit_invoke(rscan_scan_unit_t *unit, char *data, in
     arg.data = data;
     arg.len = len;
 
-    status = (hs_error_t) rb_thread_call_without_gvl(
-            scan_gvl_wrapper, (void*) &arg, RUBY_UBF_IO, NULL);
+    status = (hs_error_t) ((long long)rb_thread_call_without_gvl(
+            scan_gvl_wrapper, (void*) &arg, RUBY_UBF_IO, NULL) << 32);
 
     // release unit lock
     pthread_mutex_unlock(&unit->lock);
@@ -211,87 +231,109 @@ extern hs_error_t rscan_scan_unit_invoke(rscan_scan_unit_t *unit, char *data, in
 
 static int rscan_scan_unit_event_handler(unsigned int id, unsigned long long from,
         unsigned long long to, unsigned int flags, void *ctx) {
-    rscan_scan_event_t *scan;
+    struct scan_op *op;
     rscan_scan_unit_t *unit;
-    rscan_event_queue_t *queue;
-    rscan_match_event_t *event;
+    struct event_queue *match_buffer;
+    struct match_event *event;
 
-    scan = (rscan_scan_event_t*) ctx;
-    unit = scan
-    Get_Queue(unit->queue, queue);
+    op = (struct scan_op*) ctx;
+    unit = op->target;
+    Get_Event_Queue(unit->match_buffer, match_buffer);
 
-    event = ALLOC(rscan_match_event_t);
+    event = ALLOC(struct match_event);
+    event->data = ALLOC(struct match_data);
+    event->id = rscan_scanner_id_gen_atomic(op->src->src);
+    
+    event->data->pattern_id = id;
+    event->data->from = from;
+    event->data->to = to;
+    event->data->flags = flags;
+    event->src = op;
 
-    event->id = id;
-    event->from = from;
-    event->to = to;
-    event->flags = flags;
-    event->src = unit;
-
-    rscan_queue_put(queue, event);
+    rscan_event_queue_put(match_buffer, event);
 
     return HS_SUCCESS;
 }
 
-static VALUE rscan_scan_unit_manager_thread(void* arg) {
+static VALUE rscan_scan_unit_operator_thread(void* arg) {
     rscan_scan_unit_t* unit;
-    rscan_event_queue_t* queue;
-    rscan_scan_event_t* event;
-    VALUE args, eventObject;
-    int status;
+    struct event_queue *buffer;
+    struct event_queue *cache;
+    unsigned int status;
+    int cDataLen;
+    char *cData;
     unit = (rscan_scan_unit_t*) arg;
-    Get_Queue(unit->queue, queue);
+    Get_Event_Queue(unit->op_buffer, buffer);
+    Get_Event_Queue(unit->op_cache, cache);
 
     // set local thread abort-on-exception status
     rb_funcall(rb_thread_current(), id_abort_exc_set, 1, Qtrue);
 
-    while (queue->open) {
-        // consume event
-        if (status = rscan_event_queue_peek_nogvlwait(queue, (rscan_event_t **)&event)) {
+    while (buffer->open) {
+        struct scan_op *op;
+        // consume scan-op from buffer
+        if (status = rscan_event_queue_shift_nogvlwait(buffer, &op)) {
             if (status == RSCAN_QUEUE_FAIL_CLOSED) {
                 continue;
             } else {
+                continue;
                 // TODO: handle other failure conditions
             }
         }
-
-        rscan_event_queue_
+        
+        // push op onto cache
+        rscan_event_queue_put(cache, op);
+        
+        cData = StringValuePtr(op->src->data);
+        cDataLen = RSTRING_LEN(op->src->data);
+        
+        if (status = rscan_scan_unit_do_scan(unit, cData, cDataLen)) {
+            if (status = HS_SCAN_TERMINATED) {
+                continue;
+            }
+            // TODO: handle errors intelligently using exceptions
+        }
+        
+        return Qtrue;
     }
 
 
     return Qtrue;
 }
 
-static VALUE rscan_scan_unit_operator_thread(void* arg) {
+static VALUE rscan_scan_unit_match_handler_thread(void* arg) {
     rscan_scan_unit_t* unit;
-    rscan_event_queue_t* buffer, cache;
-    rscan_scan_t* event;
-    VALUE args, eventObject;
-    int status;
+    struct event_queue *match_buffer;
+    struct match_event *event, **event_ptr;
+    VALUE args, event_object;
+    rscan_queue_err_t status;
     unit = (rscan_scan_unit_t*) arg;
-    Get_Queue(unit->op_buffer, buffer);
-    Get_Queue(unit->op_cache, cache);
+    Get_Event_Queue(unit->match_buffer, match_buffer);
 
     // set local thread abort-on-exception status
     rb_funcall(rb_thread_current(), id_abort_exc_set, 1, Qtrue);
 
-    while (queue->open) {
+    while (match_buffer->open) {
+        
         // consume event
-        if (status = rscan_event_queue_shift_nogvlwait(queue, (rscan_event_t **)&event)) {
+        if (status = rscan_event_queue_shift_nogvlwait(match_buffer, &event)) {
             if (status == RSCAN_QUEUE_FAIL_CLOSED) {
                 continue;
             } else {
                 // TODO: handle other failure conditions
             }
         }
-
-        eventObject = rb_funcall(rscan_class_event(), id_new, 0);
-        Get_Event_Ptr(eventObject, eventPtr);
-        *eventPtr = event;
-        args = rb_ary_new_from_args(2, eventObject, INT2NUM(unit));
+        
+        // TODO: pool and re-use event wrapper objects
+        event_object = rb_funcall(rscan_class_match_event(), id_new, 0);
+        Get_Match_Event_Ptr(event_object, event_ptr);
+        *event_ptr = event;
+        event->self = event_object;
+        
+        args = rb_ary_new_from_args(2, event_object, unit->self);
 
         // call handler
-        rb_proc_call(unit->handler, args);
+        rb_proc_call(unit->handler_proc, args);
     }
 
     return Qtrue;
@@ -307,9 +349,9 @@ static void* scan_gvl_wrapper(void* arg) {
     Get_Db(args->unit->db, db);
     Get_Scratch(args->unit->scratch, scratch);
 
-    status = hs_scan(db->obj, args->data, args->len, 0, scratch->obj, args->unit->match, (void *) args->unit);
+    status = hs_scan(db->obj, args->data, args->len, 0, scratch->obj, args->unit->match_func, (void *) args->unit);
 
-    return (void*) status;
+    return (void*)(unsigned long long) status;
 }
 
 extern VALUE rscan_class_scan_unit() {

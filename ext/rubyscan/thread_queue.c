@@ -29,7 +29,7 @@ static VALUE rscan_thread_queue_m_initialize(VALUE self) {
     return self;
 }
 
-extern VALUE rscan_class_queue() {
+extern VALUE rscan_class_thread_queue() {
     // TODO throw error if class is not loaded
     return class_thread_queue;
 }

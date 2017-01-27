@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <ruby.h>
+#include <ruby/thread.h>
 #include <ruby/thread_native.h>
 #include <hs/hs.h>
 

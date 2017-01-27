@@ -8,54 +8,73 @@
 
 struct event_queue_member {
     struct event_queue_member *next;
-    rscan_event_t *event;
-}
+    struct event *event;
+};
 
 struct event_queue {
     pthread_mutex_t lock;
     pthread_cond_t ready;
     pthread_cond_t empty;
     int open;
+    unsigned int length;
     struct event_queue_member *head;
     struct event_queue_member *tail;
-}
+};
 
 VALUE rscan_event_queue_define(VALUE root);
 VALUE rscan_class_event_queue();
 
-#define rscan_event_queue_put(queue, event) \
-            rscan_queue_put((rscan_queue_t *)(queue), (rscan_event_t *)event)
+#define rscan_event_queue_close(event_queue) \
+            rscan_queue_close((struct queue*)(event_queue))
+            
+#define rscan_event_queue_closed_p(event_queue) \
+            rscan_queue_closed_p((struct queue*)(event_queue))
 
-#define rscan_event_queue_shift(queue) \
-            (rscan_event_t *)rscan_queue_shift((rscan_queue_t *)(queue))
+#define rscan_event_queue_open(event_queue) \
+            rscan_queue_open((struct queue*)(event_queue))
+            
+#define rscan_event_queue_open_p(event_queue) \
+            rscan_queue_open_p((struct queue*)(event_queue))
 
-#define rscan_event_queue_shift_ptr(queue, out) \
-            rscan_queue_shift_ptr((rscan_queue_t *)(queue), (rscan_event_t **)(out))
+#define rscan_event_queue_drop(event_queue) \
+            rscan_queue_drop((struct queue*)(event_queue))
+            
+#define rscan_event_queue_drop_all(event_queue) \
+            rscan_queue_drop_all((struct queue*)(event_queue))
 
-#define rscan_event_queue_shift_nogvlwait(queue, out) \
-            rscan_queue_shift_nogvlwait((rscan_queue_t *)(queue), (rscan_event_t **)(out))
+#define rscan_event_queue_put(event_queue, event) \
+            rscan_queue_put((struct queue *)(event_queue), (void *)(event))
 
-#define rscan_event_queue_shift_nonblock(queue, out) \
-            rscan_event_queue_shift_nonblock_opt((queue), RSCAN_QUEUE_LOCKWAIT_DEFAULT, (out))
+#define rscan_event_queue_shift(event_queue) \
+            (struct event *)rscan_queue_shift((struct queue *)(event_queue))
 
-#define rscan_event_queue_shift_nonblock_opt(queue, lock_wait, out) \
-            rscan_queue_shift_nonblock_opt((rscan_queue_t *)(queue), (lock_wait), (rscan_event_t **)(out))
+#define rscan_event_queue_shift_ptr(event_queue, out) \
+            rscan_queue_shift_ptr((struct queue *)(event_queue), (void **)(out))
 
-#define rscan_event_queue_peek(queue, i) \
-            (rscan_event_t *)rscan_queue_peek((rscan_queue_t *)(queue), (i))
+#define rscan_event_queue_shift_nogvlwait(event_queue, out) \
+            rscan_queue_shift_nogvlwait((struct queue *)(event_queue), (void **)(out))
 
-#define rscan_event_queue_peek_ptr(queue, i, out) \
-            rscan_queue_peek_ptr((rscan_queue_t *)(queue), (i), (rscan_event_t **)(out))
+#define rscan_event_queue_shift_nonblock(event_queue, out) \
+            rscan_event_queue_shift_nonblock_opt((event_queue), RSCAN_QUEUE_LOCKWAIT_DEFAULT, (out))
 
-#define rscan_event_queue_peek_nogvlwait(queue, i, out) \
-            rscan_queue_peek_nogvlwait((rscan_queue_t *)(queue), (i), (rscan_event_t **)(out))
+#define rscan_event_queue_shift_nonblock_opt(event_queue, lock_wait, out) \
+            rscan_queue_shift_nonblock_opt((struct queue *)(event_queue), (lock_wait), (void **)(out))
 
-#define rscan_event_queue_peek_nonblock(queue, i, out) \
-            rscan_event_queue_peek_nonblock_opt((queue), RSCAN_QUEUE_LOCKWAIT_DEFAULT, (i), (out))
+#define rscan_event_queue_peek(event_queue, i) \
+            (struct event *)rscan_queue_peek((struct queue *)(event_queue), (i))
 
-#define rscan_event_queue_peek_nonblock_opt(queue, lock_wait, i, out) \
-            rscan_queue_peek_nonblock_opt((rscan_queue_t *)(queue), (lock_wait), (i), (rscan_event_t **)(out))
+#define rscan_event_queue_peek_ptr(event_queue, i, out) \
+            rscan_queue_peek_ptr((struct queue *)(event_queue), (i), (void **)(out))
+
+#define rscan_event_queue_peek_nogvlwait(event_queue, i, out) \
+            rscan_queue_peek_nogvlwait((struct queue *)(event_queue), (i), (void **)(out))
+
+#define rscan_event_queue_peek_nonblock(event_queue, i, out) \
+            rscan_event_queue_peek_nonblock_opt((event_queue), RSCAN_QUEUE_LOCKWAIT_DEFAULT, (i), (out))
+
+#define rscan_event_queue_peek_nonblock_opt(event_queue, lock_wait, i, out) \
+            rscan_queue_peek_nonblock_opt((struct queue *)(event_queue), (lock_wait), (i), (struct event **)(out))
 
 #define Get_Event_Queue(value,pointer) \
-        Data_Get_Struct(value,rscan_event_queue_t,pointer)
+        Data_Get_Struct(value,struct event_queue,pointer)
 #endif

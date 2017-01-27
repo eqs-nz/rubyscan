@@ -14,7 +14,11 @@
             </sourceRootList>
             <confList>
                 <confElem>
-                    <name>Default</name>
+                    <name>local-wsl-linux</name>
+                    <type>0</type>
+                </confElem>
+                <confElem>
+                    <name>remote-vm-linux</name>
                     <type>0</type>
                 </confElem>
             </confList>

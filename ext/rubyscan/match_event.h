@@ -6,17 +6,23 @@
 #ifndef RSCAN_MATCH_EVENT_H
 #define RSCAN_MATCH_EVENT_H
 
-typedef struct match_event {
-    rscan_event_t head;
-    unsigned int id;
+struct match_event {
+    unsigned long long id;
+    VALUE self;
+    struct scan_op *src;
+    struct match_data *data;
+};
+
+struct match_data {
+    unsigned int pattern_id;
+    unsigned int flags;
     unsigned long long from;
     unsigned long long to;
-    unsigned int flags;
-} rscan_match_event_t;
+};
 
 extern VALUE rscan_match_event_define(VALUE root);
 extern VALUE rscan_class_match_event();
 
 #define Get_Match_Event_Ptr(value,pointer) \
-        Data_Get_Struct(value,rscan_match_event_t*,pointer)
+        Data_Get_Struct(value,struct match_event*,pointer)
 #endif

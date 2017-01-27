@@ -7,6 +7,8 @@
 
 static VALUE class_scanner;
 
+static VALUE scanner_management_thread(void *arg);
+
 static VALUE rscan_scanner_alloc(VALUE self);
 static VALUE rscan_scanner_m_init(VALUE self);
 static VALUE rscan_scanner_m_scan(VALUE self, VALUE data);
@@ -46,42 +48,30 @@ static VALUE rscan_scanner_alloc(VALUE klass) {
 static VALUE rscan_scanner_m_init(VALUE self) {
     rscan_scanner_t *scanner;
     Get_Scanner(self, scanner);
+    scanner->self = self;
     scanner->running = Qfalse;
     scanner->in_buffer = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    scanner->in_cache = rb_funcall(rscan_class_event_queue(), rb_intern("new"), 0);
+    scanner->manager_th = rb_thread_create(&scanner_management_thread, (void *)scanner);
     scanner->phases = rb_ary_new();
     scanner->next_id = 0;
     return self;
 }
 
 static VALUE rscan_scanner_m_scan(VALUE self, VALUE data) {
-    int i/*, cDataLen*/;
-    //char* cData;
     rscan_scanner_t* scanner;
     rscan_scan_unit_t* unit;
-    rscan_scan_event_t* event;
+    struct scan_event* event;
     struct event_queue *buffer;
-    hs_error_t status;
     Check_Type(data, T_STRING);
     Get_Scanner(self, scanner);
     Get_Event_Queue(scanner->in_buffer, buffer);
-    event = ALLOC(rscan_scan_event_t);
-    event.head.id = __atomic_fetch_add(&scanner->next_id, 1, __ATOMIC_ACQ_REL));
-    event.head.src = scanner;
-    //cData = StringValuePtr(data);
-    //cDataLen = RSTRING_LEN(data);
-    event.data = data;
+    event = ALLOC(struct scan_event);
+    event->id = rscan_scanner_id_gen_atomic(scanner);
+    event->src = scanner;
+    event->data = data;
 
-    rscan_queue_put(buffer, event);
-
-    /*
-    for (i = 0; i < RARRAY_LEN(scanner->phases); i++) {
-        Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
-        if (status = rscan_scan_unit_invoke(unit, cData, cDataLen)) {
-            if (status = HS_SCAN_TERMINATED) {
-                continue;
-            }
-        }
-    }*/
+    rscan_event_queue_put(buffer, event);
 
     return self;
 }
@@ -113,10 +103,11 @@ static VALUE rscan_scanner_m_running_get(VALUE self) {
 static VALUE rscan_scanner_m_running_set(VALUE self, VALUE running) {
     rscan_scanner_t *scanner;
     rscan_scan_unit_t *unit;
-    rscan_event_queue_t *buffer;
+    struct event_queue *buffer, *cache;
     VALUE old_state, new_state;
     Get_Scanner(self, scanner);
-    Get_Event_Queue(buffer, scanner->in_buffer);
+    Get_Event_Queue(scanner->in_buffer, buffer);
+    Get_Event_Queue(scanner->in_cache, cache);
     old_state = scanner->running;
     scanner->running = new_state = RTEST(running) ? Qtrue : Qfalse;
     // switching on
@@ -127,16 +118,17 @@ static VALUE rscan_scanner_m_running_set(VALUE self, VALUE running) {
             Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
             rscan_scan_unit_running_set(unit, new_state);
         }
-        scanner->manager = rb_thread_new(&scanner_management_thread, (void *)scanner);
-        rscan_queue_open(buffer);
-        rb_thread_run(manager);
+        rscan_event_queue_open(buffer);
+        rscan_event_queue_open(cache);
+        rb_thread_run(scanner->manager_th);
     }
     // switching off
     if (old_state &&!new_state) {
         int i;
         // turn off incoming scans, then shut down units
-        rscan_queue_close(buffer);
-        for (i = 0; i < RARRAY_LEN(scanner->phases); i++) {
+        rscan_event_queue_close(buffer);
+        rscan_event_queue_close(cache);
+        for (i = 0; i < RARRAY_LENINT(scanner->phases); i++) {
             Get_Scan_Unit(RARRAY_AREF(scanner->phases, i), unit);
             rscan_scan_unit_running_set(unit, new_state);
         }
@@ -146,16 +138,18 @@ static VALUE rscan_scanner_m_running_set(VALUE self, VALUE running) {
 
 static VALUE scanner_management_thread(void *arg) {
     rscan_scanner_t *scanner;
-    rscan_event_queue_t *queue;
-    rscan_scan_event_t *event;
-    VALUE first_unit;
+    struct event_queue *buffer, *cache;
+    struct scan_event *event;
+    rscan_scan_unit_t *first_unit;
+    rscan_queue_err_t status;
     scanner = (rscan_scanner_t *) arg;
-    Get_Event_Queue(scanner->in_buffer, queue);
+    Get_Event_Queue(scanner->in_buffer, buffer);
+    Get_Event_Queue(scanner->in_cache, cache);
     Get_Scan_Unit(RARRAY_AREF(scanner->phases, 0), first_unit);
     
-    while (queue->open) {
+    while (buffer->open) {
         // consume event
-        if (status = rscan_queue_shift_nogvlwait(queue, (rscan_event_t **)&event)) {
+        if (status = rscan_event_queue_shift_nogvlwait(buffer, &event)) {
             if (status == RSCAN_QUEUE_FAIL_CLOSED) {
                 continue;
             } else {
@@ -163,7 +157,8 @@ static VALUE scanner_management_thread(void *arg) {
             }
         }
         // condition: *event points to a new event
-        rscan_scan_unit_invoke(first_unit, )
+        rscan_event_queue_put(cache, event);
+        rscan_scan_unit_push_event(first_unit, event);
     }
     
     return Qtrue;

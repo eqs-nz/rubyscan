@@ -7,7 +7,7 @@
 
 static VALUE class_match_event;
 
-static void rscan_match_event_free(rscan_match_event_t **pointer);
+static void rscan_match_event_free(struct match_event **pointer);
 static VALUE rscan_match_event_alloc(VALUE klass);
 
 extern VALUE rscan_match_event_define(VALUE root) {
@@ -17,14 +17,14 @@ extern VALUE rscan_match_event_define(VALUE root) {
 }
 
 /* rubyscan::Native::MatchEvent class functions */
-static void rscan_match_event_free(rscan_match_event_t **pointer) {
+static void rscan_match_event_free(struct match_event **pointer) {
     xfree(*pointer);
     xfree(pointer);
 }
 
 static VALUE rscan_match_event_alloc(VALUE klass) {
-    rscan_match_event_t** pEvent;
-    VALUE self = Data_Make_Struct(klass, rscan_match_event_t*, NULL, rscan_match_event_free, pEvent);
+    struct match_event** pEvent;
+    VALUE self = Data_Make_Struct(klass, struct match_event*, NULL, rscan_match_event_free, pEvent);
     return self;
 }
 

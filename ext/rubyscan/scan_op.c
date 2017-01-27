@@ -7,13 +7,13 @@
 
 static VALUE class_scan_op;
 
-static void rscan_scan_op_free(rscan_match_event_t **pointer);
-static VALUE rscan_event_alloc(VALUE klass);
+static void rscan_scan_op_free(struct scan_op *pointer);
+static VALUE rscan_scan_op_alloc(VALUE klass);
 
 extern VALUE rscan_scan_op_define(VALUE root) {
     VALUE klass = rb_define_class_under(root, "ScanOp", rscan_class_event());
-    rb_define_alloc_func(klass, rscan_event_alloc);
-    return class_scan_op_event = klass;
+    rb_define_alloc_func(klass, rscan_scan_op_alloc);
+    return class_scan_op = klass;
 }
 
 /* Scan::Runtime::ScanOp class functions */
