@@ -8,7 +8,7 @@ The Rubyscan library provides classes for the definition and compilation of regu
 
 # License
 
-hyperscan.rb is licensed under the Simplified BSD License. See the LICENSE file in the project repository.
+Rubyscan is licensed under the Simplified BSD License. See the LICENSE file in the project repository.
 
 ## Usage
 
